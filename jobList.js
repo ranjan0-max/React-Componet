@@ -4,8 +4,11 @@ import { useState, useContext } from 'react';
 import { CSVExport } from '../../forms/tables/TableExports';
 import { SiteValueContext } from 'contexts/SiteContext';
 import useAuth from 'hooks/useAuth';
+import { IconStatusChange, IconDeviceFloppy } from '@tabler/icons';
 // material-ui
 import { useTheme } from '@mui/material/styles';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
+import HighlightOffIcon from '@mui/icons-material/HighlightOff';
 import {
     Box,
     CardContent,
@@ -27,7 +30,9 @@ import {
     Typography,
     Button,
     Stack,
-    Dialog
+    Dialog,
+    Menu,
+    MenuItem
 } from '@mui/material';
 
 import { visuallyHidden } from '@mui/utils';
@@ -44,14 +49,49 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import SearchIcon from '@mui/icons-material/Search';
 import VisibilityTwoToneIcon from '@mui/icons-material/VisibilityTwoTone';
 import EditTwoToneIcon from '@mui/icons-material/EditTwoTone';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { CSVLink } from 'react-csv';
 
 // Api
-import { getJob, createJob, updateJob } from 'api/job/jobApi';
+import { getExportJobBySite, createExportJob, updateExportJob, updateTheStatusOfExportJob, cancelJob } from 'api/job/jobApi';
 import { getLoadListByNumber } from 'api/loadList/loadListApi';
+import { getMileStoneForStatusChange } from 'api/mileStone/mileStoneApi';
+import { getBookingPacketDetails } from 'api/bookingItems/bookingItemsApi';
 
 // form
-import JobForm from './JobForm';
+import ExportJobForm from './ExportJobForm';
+import StatusChangeModel from './StatusChangeModel';
+import JobLogModel from './JobLogModel';
+
+// constant
+import { ERROR, BLANK } from 'utils/constant';
+
+const headerForCsv = [
+    {
+        label: 'Booking Number',
+        key: '_id'
+    },
+    {
+        label: 'Packet Count',
+        key: 'totalPkt'
+    },
+    {
+        label: 'AWB Number',
+        key: 'awbNumber'
+    },
+    {
+        label: 'Customer',
+        key: 'customerName'
+    },
+    {
+        label: 'Consignee',
+        key: 'consigneeName'
+    },
+    {
+        label: 'Shipper',
+        key: 'shipperName'
+    }
+];
 
 // table sort
 function descendingComparator(a, b, orderBy) {
@@ -214,12 +254,13 @@ EnhancedTableToolbar.propTypes = {
 
 // ==============================|| Job LIST ||============================== //
 
-const JobList = () => {
+const ExportJobList = () => {
     const theme = useTheme();
     const { user } = useAuth();
     const { siteValue } = useContext(SiteValueContext);
     const snackbars = useSnackbars();
     const location = useLocation();
+    const navigate = useNavigate();
     const queryParams = new URLSearchParams(location.search);
     const loadListNumber = queryParams.get('loadListNumber');
     const open = queryParams.get('open');
@@ -231,18 +272,37 @@ const JobList = () => {
     const [rowsPerPage, setRowsPerPage] = React.useState(10);
     const [search, setSearch] = React.useState('');
     const [rows, setRows] = React.useState([]);
-    const [showJobForm, setShowJobForm] = useState();
+    const [showJobForm, setShowJobForm] = useState(false);
     const [jobDetail, setJobDetail] = useState({});
-    const [leadFormEvent, setLeadFormEvent] = useState();
-    const [showLeadPreview, setShowLeadPreview] = useState(false);
+    const [jobEvent, setJobEvent] = useState();
+    const [showStatusChangeModel, setShowStatusChangeModel] = useState(false);
     const [originalData, setOriginalData] = useState([]);
     const [loadListData, setLoadListData] = useState([]);
+    const [reportData, setReportData] = useState([]);
+    const [fetchingData, setFetchingData] = useState(false);
+    const [showJobLogModel, setShowJobLogModel] = useState(false);
+    const [jobNumber, setJobNumber] = useState('');
+    const [listOfMileStone, setListOfMileStone] = useState([]);
+    const [anchorEl, setAnchorEl] = useState(null);
+    const [selectedRow, setSelectedRow] = useState(null);
+
+    const handleClick = (event, rowOfMenu) => {
+        setAnchorEl(event.currentTarget);
+        setSelectedRow(rowOfMenu);
+    };
+
+    const handleClose = () => {
+        setAnchorEl(null);
+        setSelectedRow(null);
+    };
+
+    // --------------------------- fetch data from server -----------------------------
 
     const fetchJobs = async () => {
         try {
-            const response = await getJob(siteValue);
+            const response = await getExportJobBySite(siteValue);
             if (typeof response === 'string') {
-                snackbars(response, 'error');
+                snackbars(response, ERROR);
             } else {
                 setRows(response);
                 setOriginalData(response);
@@ -256,20 +316,53 @@ const JobList = () => {
         try {
             const response = await getLoadListByNumber(loadListNumber);
             if (typeof response === 'string') {
-                snackbars(response, 'error');
+                snackbars(response, ERROR);
             } else {
-                setLoadListData(response);
-                console.log(response);
+                setLoadListData(response[0]);
             }
         } catch (error) {
             console.log(error);
         }
     };
 
-    const onCancel = () => {
-        setShowJobForm(false);
-        setShowLeadPreview(false);
+    const fetchBookingDetails = async (loadListNumber) => {
+        try {
+            const response = await getBookingPacketDetails(loadListNumber);
+            if (typeof response === 'string') {
+                snackbars(response, ERROR);
+            } else {
+                setReportData(response);
+            }
+        } catch (error) {
+            console.log(error);
+        } finally {
+            setFetchingData(false); // Set fetchingData to false when data fetching completes
+        }
     };
+
+    const fetchMileStoneForImport = async () => {
+        try {
+            const response = await getMileStoneForStatusChange({});
+            if (typeof response === 'string') {
+                snackbars(response, ERROR);
+            } else {
+                setListOfMileStone(response);
+            }
+        } catch (error) {
+            console.log(error);
+        }
+    };
+
+    // ------------------------------------ end ----------------------------------------
+
+    const onCancel = () => {
+        setAnchorEl(null);
+        setShowJobForm(false);
+        setShowJobLogModel(false);
+        setShowStatusChangeModel(false);
+    };
+
+    // ------------------------------------ search ----------------------------------------
 
     const handleSearch = (event) => {
         const newString = event?.target.value;
@@ -331,14 +424,19 @@ const JobList = () => {
 
     const emptyRows = page > 0 ? Math.max(0, (1 + page) * rowsPerPage - rows.length) : 0;
 
+    // ------------------------------------ end ----------------------------------------
+
+    // ------------------------------------ job operations ---------------------------------
+
     const handleEventCreate = async (data) => {
         try {
-            const response = await createJob(data);
+            const response = await createExportJob(data);
             if (typeof response === 'string') {
-                snackbars(response, 'error');
+                snackbars(response, ERROR);
             } else {
                 snackbars(response.data.message, 'success');
                 onCancel();
+                navigate('/exportJob');
             }
         } catch (error) {
             console.log(error);
@@ -348,11 +446,10 @@ const JobList = () => {
 
     const handleEventUpdate = async (data) => {
         const id = data.id;
-        delete data.id;
         try {
-            const response = await updateJob(id, data);
+            const response = await updateExportJob(id, data);
             if (typeof response === 'string') {
-                snackbars(response, 'error');
+                snackbars(response, ERROR);
             } else {
                 snackbars(response.data.message, 'success');
                 onCancel();
@@ -363,28 +460,75 @@ const JobList = () => {
         fetchJobs();
     };
 
+    const handleStatusChangeUpdate = async (jobNumber, data) => {
+        try {
+            const response = await updateTheStatusOfExportJob(jobNumber, data);
+            if (typeof response === 'string') {
+                snackbars(response, ERROR);
+            } else {
+                snackbars(response.data.message, 'success');
+                onCancel();
+                fetchJobs();
+            }
+        } catch (error) {
+            console.log(error);
+        }
+    };
+
+    // ------------------------------------ end ----------------------------------------
+
+    // ------------------------------------ Cancel Job ----------------------------------------
+
+    const handleCancelButton = async (jobNumberForCancel) => {
+        try {
+            const response = await cancelJob(jobNumberForCancel);
+            if (typeof response === 'string') {
+                snackbars(response, ERROR);
+            } else {
+                snackbars(response.data.message, 'success');
+                onCancel();
+                fetchJobs();
+            }
+        } catch (error) {
+            console.log(error);
+        }
+    };
+
+    // ------------------------------------ end ----------------------------------------
+
+    const handlePreviewButton = (jobNumber) => {
+        setJobNumber(jobNumber);
+        setShowJobLogModel(true);
+    };
+
+    const handleExportReport = async (row) => {
+        await fetchBookingDetails(row.loadListNumber);
+    };
+
     const handleEdit = (row) => {
-        setLeadFormEvent(true);
+        setJobEvent(true);
         setJobDetail(row);
         setShowJobForm(true);
     };
 
-    const handleLeadPreview = (row) => {
+    const handleStatusChange = (row) => {
         setJobDetail(row);
-        setShowLeadPreview(true);
+        setShowStatusChangeModel(true);
     };
 
-    const handleAddClick = () => {
-        setLeadFormEvent(false);
-        setShowJobForm(true);
-    };
+    function getRowStatus(statusId) {
+        const mileStone = listOfMileStone.filter((mileStone) => mileStone._id === statusId);
+        return mileStone[0]?.name;
+    }
 
     React.useEffect(() => {
         fetchJobs();
+        fetchMileStoneForImport();
     }, []);
 
     React.useEffect(() => {
         fetchJobs();
+        fetchMileStoneForImport();
     }, [siteValue]);
 
     React.useEffect(() => {
@@ -394,34 +538,60 @@ const JobList = () => {
     }, [open]);
 
     React.useEffect(() => {
-        if (loadListData.length) {
+        if (open && loadListNumber && loadListData) {
             setShowJobForm(true);
         }
     }, [loadListData]);
 
-    // React.useEffect(() => {
-    //     if (location.pathname === '/sales/lead') {
-    //         setShowJobForm(false);
-    //         setShowLeadPreview(false);
-    //     }
-    // }, [location]);
+    React.useEffect(() => {
+        if (!fetchingData && reportData.length > 0) {
+            const csvData = [];
+            // Add headers
+            const headerRow = headerForCsv.map((header) => header.label);
+            csvData.push(headerRow.join(','));
+
+            // Add data rows
+            reportData.forEach((item) => {
+                const dataRow = headerForCsv.map((header) => item[header.key]);
+                csvData.push(dataRow.join(','));
+            });
+            const csvLink = document.createElement('a');
+            const csvContent = `data:text/csv;charset=utf-8,${csvData.join('\n')}`;
+            csvLink.href = encodeURI(csvContent);
+            csvLink.download = 'job.csv';
+            csvLink.click();
+        }
+    }, [fetchingData, reportData]);
+
+    React.useEffect(() => {
+        if (location.pathname === '/exportJob') {
+            setShowJobForm(false);
+        }
+    }, [location]);
 
     // eslint-disable-next-line
 
     if (showJobForm) {
-        return <JobForm onCancel={onCancel} jobDetail={jobDetail} loadListData={loadListData} />;
+        return (
+            <ExportJobForm
+                jobEvent={jobEvent}
+                onCancel={onCancel}
+                jobDetail={jobDetail}
+                loadListData={loadListData}
+                handleUpdate={handleEventUpdate}
+                handleCreate={handleEventCreate}
+            />
+        );
     }
     return (
         <MainCard
             title={
                 <Typography variant="h3" color="secondary">
-                    Job List
+                    Export Job List
                 </Typography>
             }
             secondary={
                 <Stack direction="row" spacing={2} alignItems="center">
-                    <CSVExport data={rows} filename="job.csv" header={headCells} />
-
                     {/* <Button color="secondary" variant="contained" onClick={handleAddClick}>
                     <AddIcon fontSize="small" /> Add 
                 </Button> */}
@@ -440,7 +610,7 @@ const JobList = () => {
                                 )
                             }}
                             onChange={handleSearch}
-                            placeholder="Search Lead"
+                            placeholder="Search Job"
                             value={search}
                             size="small"
                         />
@@ -450,17 +620,17 @@ const JobList = () => {
             {/* table */}
             <TableContainer sx={{ maxHeight: 700 }}>
                 <TableContainer stickyHeader sx={{ minWidth: 750 }} aria-labelledby="tableTitle">
-                    <EnhancedTableHead
-                        theme={theme}
-                        numSelected={selected.length}
-                        order={order}
-                        orderBy={orderBy}
-                        onSelectAllClick={handleSelectAllClick}
-                        onRequestSort={handleRequestSort}
-                        rowCount={rows.length}
-                        selected={selected}
-                    />
                     <Table>
+                        <EnhancedTableHead
+                            theme={theme}
+                            numSelected={selected.length}
+                            order={order}
+                            orderBy={orderBy}
+                            onSelectAllClick={handleSelectAllClick}
+                            onRequestSort={handleRequestSort}
+                            rowCount={rows.length}
+                            selected={selected}
+                        />
                         <TableBody>
                             {rows.length === 0 ? ( // Check if there are no rows
                                 <TableRow>
@@ -475,7 +645,6 @@ const JobList = () => {
                                         /** Make sure no display bugs if row isn't an OrderData object */
                                         if (typeof row === 'number') return null;
                                         const isItemSelected = isSelected(row?.name);
-                                        const labelId = `enhanced-table-checkbox-${index}`;
 
                                         return (
                                             <TableRow
@@ -491,32 +660,78 @@ const JobList = () => {
                                                         {row?.jobNumber}
                                                     </Typography>
                                                 </TableCell>
-
-                                                <TableCell align="center">
-                                                    <Typography variant="subtitle1">{row?.loadListNumber}</Typography>
-                                                </TableCell>
+                                                <TableCell align="center">{row?.loadListNumber}</TableCell>
 
                                                 <TableCell align="center">{row?.origin}</TableCell>
                                                 <TableCell align="center">{row?.destination}</TableCell>
-                                                <TableCell align="center">{row?.status}</TableCell>
+                                                <TableCell align="center">
+                                                    {row.status && (
+                                                        <Chip
+                                                            label={row.status === 'JOB CREATED' ? row.status : getRowStatus(row.status)}
+                                                            size="small"
+                                                            chipcolor="default"
+                                                            style={{
+                                                                fontWeight: 'bold'
+                                                            }}
+                                                        />
+                                                    )}
+                                                </TableCell>
                                                 <TableCell align="center">{formatDate(row?.created_at ?? '')}</TableCell>
 
-                                                <TableCell align="center" sx={{ pr: 3 }}>
-                                                    <IconButton color="secondary" size="large" aria-label="edit">
-                                                        <EditTwoToneIcon sx={{ fontSize: '1.3rem' }} onClick={() => handleEdit(row)} />
-                                                    </IconButton>
-                                                    <IconButton
-                                                        color="primary"
-                                                        size="large"
-                                                        aria-label="view"
-                                                        onClick={() => handleLeadPreview(row)}
-                                                    >
-                                                        <VisibilityTwoToneIcon sx={{ fontSize: '1.3rem' }} />
-                                                    </IconButton>
+                                                <TableCell align="center" sx={{ pr: 1 }}>
+                                                    <Stack direction="row" spacing={1}>
+                                                        <IconButton
+                                                            color="secondary"
+                                                            size="small"
+                                                            aria-label="menu"
+                                                            onClick={(event) => handleClick(event, row)}
+                                                        >
+                                                            <MoreVertIcon />
+                                                        </IconButton>
+                                                    </Stack>
                                                 </TableCell>
                                             </TableRow>
                                         );
                                     })
+                            )}
+                            {selectedRow && (
+                                <Menu id="simple-menu" anchorEl={anchorEl} keepMounted open={Boolean(anchorEl)} onClose={handleClose}>
+                                    <MenuItem onClick={() => handleEdit(selectedRow)}>
+                                        <Tooltip title="Edit The Job">
+                                            <IconButton color="secondary" size="small" aria-label="edit">
+                                                <EditTwoToneIcon />
+                                            </IconButton>
+                                        </Tooltip>
+                                    </MenuItem>
+                                    <MenuItem onClick={() => handleStatusChange(selectedRow)}>
+                                        <Tooltip title="Status Change">
+                                            <IconButton color="secondary" size="small" aria-label="edit">
+                                                <IconStatusChange />
+                                            </IconButton>
+                                        </Tooltip>
+                                    </MenuItem>
+                                    <MenuItem onClick={() => handleExportReport(selectedRow)} disabled={fetchingData}>
+                                        <Tooltip title="Dowload Job Detail">
+                                            <IconButton color="secondary" size="small" aria-label="edit">
+                                                <IconDeviceFloppy />
+                                            </IconButton>
+                                        </Tooltip>
+                                    </MenuItem>
+                                    <MenuItem onClick={() => handlePreviewButton(selectedRow?.jobNumber)}>
+                                        <Tooltip title="Logs">
+                                            <IconButton color="secondary" size="small" aria-label="edit">
+                                                <VisibilityTwoToneIcon />
+                                            </IconButton>
+                                        </Tooltip>
+                                    </MenuItem>
+                                    <MenuItem onClick={() => handleCancelButton(selectedRow?.jobNumber)}>
+                                        <Tooltip title="Cancel Job">
+                                            <IconButton color="secondary" size="small" aria-label="edit">
+                                                <HighlightOffIcon />
+                                            </IconButton>
+                                        </Tooltip>
+                                    </MenuItem>
+                                </Menu>
                             )}
                             {emptyRows > 0 && (
                                 <TableRow
@@ -541,8 +756,16 @@ const JobList = () => {
                 onPageChange={handleChangePage}
                 onRowsPerPageChange={handleChangeRowsPerPage}
             />
+            <Dialog maxWidth="md" onClose={onCancel} open={showStatusChangeModel} sx={{ '& .MuiDialog-paper': { p: 0 } }}>
+                {showStatusChangeModel && (
+                    <StatusChangeModel onCancel={onCancel} handleStatusChangeUpdate={handleStatusChangeUpdate} jobDetail={jobDetail} />
+                )}
+            </Dialog>
+            <Dialog maxWidth="lg" onClose={onCancel} open={showJobLogModel} sx={{ '& .MuiDialog-paper': { p: 0 } }}>
+                {showJobLogModel && <JobLogModel onCancel={onCancel} jobNumber={jobNumber} />}
+            </Dialog>
         </MainCard>
     );
 };
 
-export default JobList;
+export default ExportJobList;
